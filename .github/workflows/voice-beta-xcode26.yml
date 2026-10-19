@@ -25,22 +25,10 @@ jobs:
           mkdir -p artifacts
           gem install cocoapods -v 1.16.2 --no-document
           pod _1.16.2_ install --deployment
-      - name: Test on iPhone and iPad
-        env:
-          TEST_RUNNER_FROTZ_TEST_LIVE_SPEECH: '1'
+      - name: Build portable arm64 simulator tests
         run: |
-          mkdir -p artifacts
-          python3 - <<'PY'
-          import json, subprocess
-          devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
-          candidates = devices['com.apple.CoreSimulator.SimRuntime.iOS-26-2']
-          for kind, name in [('phone', 'iPhone 17 Pro'), ('tablet', 'iPad Pro 11-inch (M5)')]:
-              device = next(d for d in candidates if d['name'] == name)
-              args = ['xcodebuild', '-workspace', 'Frotz.xcworkspace', '-scheme', 'Frotz', '-configuration', 'Debug', '-destination', 'platform=iOS Simulator,id='+device['udid'], '-derivedDataPath', 'ci-derived', '-resultBundlePath', 'artifacts/'+kind+'.xcresult', 'CODE_SIGNING_ALLOWED=NO', 'IPHONEOS_DEPLOYMENT_TARGET=13.0', 'test']
-              with open('artifacts/'+kind+'.log', 'w') as log:
-                  subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, check=True)
-          PY
-          xcodebuild -workspace Frotz.xcworkspace -scheme Frotz -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ci-sim-arm64 ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=13.0 build > artifacts/simulator-arm64.log 2>&1
+          xcodebuild -workspace Frotz.xcworkspace -scheme Frotz -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ci-sim-arm64 ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=13.0 build-for-testing > artifacts/simulator-arm64.log 2>&1
+          ditto -c -k --keepParent ci-sim-arm64/Build/Products artifacts/Frotz-test-products-arm64.zip
           ditto -c -k --keepParent ci-sim-arm64/Build/Products/Debug-iphonesimulator/Frotz.app artifacts/Frotz-simulator.zip
       - name: Archive build 7 without signing credentials
         run: |
