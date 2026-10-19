@@ -10,7 +10,7 @@ permissions:
 jobs:
   build:
     if: github.repository == 'anandman/iosfrotz'
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -38,7 +38,8 @@ jobs:
               with open('artifacts/'+kind+'.log', 'w') as log:
                   subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, check=True)
           PY
-          ditto -c -k --keepParent ci-derived/Build/Products/Debug-iphonesimulator/Frotz.app artifacts/Frotz-simulator.zip
+          xcodebuild -workspace Frotz.xcworkspace -scheme Frotz -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ci-sim-arm64 ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=13.0 build > artifacts/simulator-arm64.log 2>&1
+          ditto -c -k --keepParent ci-sim-arm64/Build/Products/Debug-iphonesimulator/Frotz.app artifacts/Frotz-simulator.zip
       - name: Archive build 7 without signing credentials
         run: |
           python3 - <<'PY'
