@@ -22,7 +22,9 @@ jobs:
         run: |
           xcodebuild -version
           test "$(xcrun --sdk iphoneos --show-sdk-version)" = '26.2'
-          pod install --deployment
+          mkdir -p artifacts
+          gem install cocoapods -v 1.16.2 --no-document
+          pod _1.16.2_ install --deployment
       - name: Test on iPhone and iPad
         env:
           TEST_RUNNER_FROTZ_TEST_LIVE_SPEECH: '1'
