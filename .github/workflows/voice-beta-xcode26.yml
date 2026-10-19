@@ -10,10 +10,10 @@ permissions:
 jobs:
   build:
     if: github.repository == 'anandman/iosfrotz'
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 40
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,7 +21,7 @@ jobs:
       - name: Verify stable SDK and install locked dependencies
         run: |
           xcodebuild -version
-          test "$(xcrun --sdk iphoneos --show-sdk-version)" = '26.5'
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = '26.2'
           pod install --deployment
       - name: Test on iPhone and iPad
         env:
@@ -31,7 +31,7 @@ jobs:
           python3 - <<'PY'
           import json, subprocess
           devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
-          candidates = devices['com.apple.CoreSimulator.SimRuntime.iOS-26-5']
+          candidates = devices['com.apple.CoreSimulator.SimRuntime.iOS-26-2']
           for kind, name in [('phone', 'iPhone 17 Pro'), ('tablet', 'iPad Pro 11-inch (M5)')]:
               device = next(d for d in candidates if d['name'] == name)
               args = ['xcodebuild', '-workspace', 'Frotz.xcworkspace', '-scheme', 'Frotz', '-configuration', 'Debug', '-destination', 'platform=iOS Simulator,id='+device['udid'], '-derivedDataPath', 'ci-derived', '-resultBundlePath', 'artifacts/'+kind+'.xcresult', 'CODE_SIGNING_ALLOWED=NO', 'IPHONEOS_DEPLOYMENT_TARGET=13.0', 'test']
