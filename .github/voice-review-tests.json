@@ -1,7 +1,9 @@
 {
-  "phase": "green-final-full-review",
-  "tests": [],
-  "minimumTests": 127,
+  "phase": "green-final-compile-gates",
+  "tests": [
+    "VoiceFeatureGateTests"
+  ],
+  "minimumTests": 5,
   "expectedFailures": 0,
-  "expectedSkips": 2
+  "expectedSkips": 0
 }
