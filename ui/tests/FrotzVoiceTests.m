@@ -8,6 +8,10 @@
 #import "FrotzInfo.h"
 #import <objc/runtime.h>
 
+@interface UITableViewController (VoiceHelpTesting)
+- (NSString *)helpTextForSection:(NSInteger)section;
+@end
+
 @interface FrotzSettingsController (ConfirmationTesting)
 - (void)create_UISwitches;
 @end
