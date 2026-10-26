@@ -10,11 +10,15 @@
 #import "RichTextView.h"
 #include <math.h>
 
+NSString *const FrotzVoiceAvailabilityDidChangeNotification = @"FrotzVoiceAvailabilityDidChange";
+static NSString *const kNarrationAvailableKey = @"FrotzNarrationAvailable";
+static NSString *const kDictationAvailableKey = @"FrotzDictationAvailable";
 static NSString *const kVoiceModeKey = @"FrotzVoiceMode";
 static NSString *const kSpeechRateKey = @"FrotzSpeechRate";
 static NSString *const kSpeechVoiceKey = @"FrotzSpeechVoiceIdentifier";
 static NSString *const kRecognitionLanguageKey = @"FrotzSpeechRecognitionLanguage";
 static NSString *const kLegacyCommandConfirmationKey = @"FrotzVoiceCommandConfirmationEnabled";
+static NSString *const kSpeakCommandConfirmationsKey = @"FrotzSpeakCommandConfirmations";
 static NSString *const kCommandConfirmationModeKey = @"FrotzVoiceCommandConfirmationMode";
 
 // Only bibliographic language is used; story text is never inspected or sent for detection.
@@ -70,6 +74,7 @@ static float rateMultiplierToAVRate(float multiplier) {
     NSSet<NSString *> *_commandWords;
     NSArray<NSString *> *_commandHints;
     NSMutableOrderedSet<NSString *> *_playerWords;
+    NSString *_lastPartialCommand, *_commandAtEndAudio;
     BOOL _hasReceivedSpeech;  // whether any speech detected this listen session
     BOOL _inputTapInstalled;
     BOOL _finishingRecognition;
@@ -79,6 +84,7 @@ static float rateMultiplierToAVRate(float multiplier) {
     // TTS state
     NSString *_currentUtteranceText;  // full text of current utterance for range mapping
     BOOL _isPaused;
+    BOOL _speakingConfirmation;
     AVSpeechUtterance *_activeUtterance;
     NSMutableArray<AVSpeechUtterance *> *_speechParagraphs;
     NSMapTable<AVSpeechUtterance *, NSNumber *> *_speechOffsets;
@@ -93,6 +99,7 @@ static float rateMultiplierToAVRate(float multiplier) {
 }
 
 @synthesize voiceMode = _voiceMode;
+@synthesize narrationAvailable = _narrationAvailable, dictationAvailable = _dictationAvailable;
 
 + (instancetype)shared {
     static VoiceManager *instance = nil;
@@ -233,11 +240,35 @@ static float rateMultiplierToAVRate(float multiplier) {
 }
 
 - (BOOL)ttsEnabled {
-    return FROTZ_ENABLE_NARRATION && (_voiceMode == VoiceModeTTSOnly || _voiceMode == VoiceModeBoth);
+    return FROTZ_ENABLE_NARRATION && self.narrationAvailable && (_voiceMode == VoiceModeTTSOnly || _voiceMode == VoiceModeBoth);
 }
 
 - (BOOL)sttEnabled {
-    return FROTZ_ENABLE_DICTATION && (_voiceMode == VoiceModeSTTOnly || _voiceMode == VoiceModeBoth);
+    return FROTZ_ENABLE_DICTATION && self.dictationAvailable && (_voiceMode == VoiceModeSTTOnly || _voiceMode == VoiceModeBoth);
+}
+
+- (BOOL)narrationSelected { return (_voiceMode & VoiceModeTTSOnly) != 0; }
+- (BOOL)dictationSelected { return (_voiceMode & VoiceModeSTTOnly) != 0; }
+- (void)setNarrationSelected:(BOOL)selected {
+    _voiceMode = (VoiceMode)(selected ? (_voiceMode | VoiceModeTTSOnly) : (_voiceMode & ~VoiceModeTTSOnly));
+}
+- (void)setDictationSelected:(BOOL)selected {
+    _voiceMode = (VoiceMode)(selected ? (_voiceMode | VoiceModeSTTOnly) : (_voiceMode & ~VoiceModeSTTOnly));
+}
+- (void)setNarrationAvailable:(BOOL)available {
+    if (_narrationAvailable == available) return;
+    _narrationAvailable = available;
+    if (!available && self.isSpeaking && !_speakingConfirmation) [self stopSpeaking];
+    [NSNotificationCenter.defaultCenter postNotificationName:FrotzVoiceAvailabilityDidChangeNotification object:self];
+}
+- (void)setDictationAvailable:(BOOL)available {
+    if (_dictationAvailable == available) return;
+    _dictationAvailable = available;
+    if (!available) {
+        if (self.isListening || _recognitionTask || _inputTapInstalled) [self stopListening];
+        if (_speakingConfirmation) [self stopSpeaking];
+    }
+    [NSNotificationCenter.defaultCenter postNotificationName:FrotzVoiceAvailabilityDidChangeNotification object:self];
 }
 
 - (VoiceMode)voiceMode {
@@ -303,6 +334,7 @@ static float rateMultiplierToAVRate(float multiplier) {
     if (!_accessibilityAnnouncement || ![notification.userInfo[UIAccessibilityAnnouncementKeyStringValue] isEqual:_accessibilityAnnouncement])
         return;
     _accessibilityAnnouncement = nil;
+    _speakingConfirmation = NO;
     if ([notification.userInfo[UIAccessibilityAnnouncementKeyWasSuccessful] boolValue]) {
         [self.delegate voiceManagerDidFinishSpeaking];
     } else {
@@ -409,12 +441,15 @@ static float rateMultiplierToAVRate(float multiplier) {
 
 + (float)minimumConfidence:(SFTranscription *)transcription {
     float confidence = 1;
-    if (transcription.segments.count == 0) return 0;
+    BOOL measured = NO;
     for (SFTranscriptionSegment *segment in transcription.segments) {
-        if (!isfinite(segment.confidence) || segment.confidence <= 0) return 0;
+        // Apple uses zero/absent scores for unknown confidence. Retain any
+        // measured low score instead of letting an unknown segment hide it.
+        if (!isfinite(segment.confidence) || segment.confidence <= 0) continue;
+        measured = YES;
         confidence = MIN(confidence, segment.confidence);
     }
-    return confidence;
+    return measured ? confidence : 0;
 }
 
 - (NSString *)commandFromResult:(SFSpeechRecognitionResult *)result {
@@ -446,8 +481,11 @@ static float rateMultiplierToAVRate(float multiplier) {
     }
     // Confidence is a heuristic, not a guarantee of intent. Zero/absent scores
     // are unknown. A confidently spoken unusual command must survive unchanged.
-    _recognizedCommandNeedsConfirmation = [[self class] minimumConfidence:result.bestTranscription] < 0.8;
-    if (!_recognizedCommandNeedsConfirmation || self.recognizingConfirmation || self.recognizingCharacterInput
+    float confidence = [[self class] minimumConfidence:result.bestTranscription];
+    BOOL changedFinal = _commandAtEndAudio.length && ![[[self class] commandTokens:_commandAtEndAudio]
+        isEqualToArray:[[self class] commandTokens:original]];
+    _recognizedCommandNeedsConfirmation = (confidence > 0 && confidence < 0.8) || changedFinal;
+    if (confidence >= 0.8 || self.recognizingConfirmation || self.recognizingCharacterInput
         || ![self.effectiveRecognitionLanguage.lowercaseString hasPrefix:@"en"]
         || [original rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"\"'“”‘’«»‹›„‟「」『』＂＇;\n."]].location != NSNotFound)
         return original;
@@ -481,10 +519,15 @@ static float rateMultiplierToAVRate(float multiplier) {
             }
         }
         if (shortCommand && [[[self class] ordinaryEnglishDirections] containsObject:tokens.firstObject]) ++score;
-        if (!safe || changes > 2 || score <= originalScore) continue;
+        if (!safe || changes > 2 || score < originalScore) continue;
+        if (score == originalScore) {
+            _recognizedCommandNeedsConfirmation = YES;
+            continue;
+        }
         if (score > bestScore) { bestScore = score; best = alternative.formattedString; tied = NO; }
         else if (score == bestScore && ![best.lowercaseString isEqualToString:alternative.formattedString.lowercaseString]) tied = YES;
     }
+    if (tied || ![best isEqualToString:original]) _recognizedCommandNeedsConfirmation = YES;
     return tied ? original : best;
 }
 
@@ -561,6 +604,7 @@ static float rateMultiplierToAVRate(float multiplier) {
 
 - (void)speakText:(NSString *)text inView:(RichTextView *)view {
     if (!self.ttsEnabled) return;
+    _speakingConfirmation = NO;
     [self rememberStoryResponse:text];
     [self speakVoiceText:text inView:view];
 }
@@ -582,6 +626,7 @@ static float rateMultiplierToAVRate(float multiplier) {
 }
 
 - (BOOL)replayLastStoryResponse {
+    if ((!FROTZ_ENABLE_NARRATION || !self.narrationAvailable) && !self.isVoiceOverEnabled) return NO;
     if (!_lastStoryResponse.length || self.voiceMode == VoiceModeOff) return NO;
     [self stopListening];
     [self stopSpeaking];
@@ -631,8 +676,11 @@ static float rateMultiplierToAVRate(float multiplier) {
 }
 
 - (void)speakConfirmationPrompt:(NSString *)text {
+    if (!FROTZ_ENABLE_DICTATION || !self.dictationAvailable) return;
     [self stopSpeaking];
+    if (!self.speakCommandConfirmations && !self.isVoiceOverEnabled) return;
     [self speakVoiceText:text inView:nil];
+    _speakingConfirmation = self.isSpeaking;
 }
 
 - (void)speakVoiceText:(NSString *)text inView:(RichTextView *)view {
@@ -678,6 +726,7 @@ static float rateMultiplierToAVRate(float multiplier) {
 }
 
 - (void)stopSpeaking {
+    _speakingConfirmation = NO;
     _accessibilityAnnouncement = nil;
     _activeUtterance = nil;
     _speechParagraphs = nil;
@@ -735,6 +784,7 @@ static float rateMultiplierToAVRate(float multiplier) {
     _activeUtterance = nil;
     _currentUtteranceText = nil;
     _isPaused = NO;
+    _speakingConfirmation = NO;
     [self clearHighlight];
     NSLog(@"Voice speech finished");
     [self.delegate voiceManagerDidFinishSpeaking];
@@ -759,7 +809,7 @@ static float rateMultiplierToAVRate(float multiplier) {
 #pragma mark - STT
 
 - (void)requestSTTPermissionsWithCompletion:(void (^)(BOOL granted))completion {
-    if (!FROTZ_ENABLE_DICTATION) { completion(NO); return; }
+    if (!FROTZ_ENABLE_DICTATION || !self.dictationAvailable) { completion(NO); return; }
     [SFSpeechRecognizer requestAuthorization:^(SFSpeechRecognizerAuthorizationStatus status) {
         if (status != SFSpeechRecognizerAuthorizationStatusAuthorized) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -835,6 +885,7 @@ static float rateMultiplierToAVRate(float multiplier) {
     }
 
     _hasReceivedSpeech = NO;
+    _lastPartialCommand = nil; _commandAtEndAudio = nil;
     _recognitionRequest = [[SFSpeechAudioBufferRecognitionRequest alloc] init];
     _recognitionRequest.shouldReportPartialResults = YES;
     NSArray *controls = [[self class] confirmationWordsForLanguage:self.effectiveRecognitionLanguage];
@@ -876,6 +927,7 @@ static float rateMultiplierToAVRate(float multiplier) {
                     return;
                 }
                 if (text.length > 0) {
+                    self->_lastPartialCommand = text;
                     self->_hasReceivedSpeech = YES;
                     [self.delegate voiceManagerDidRecognizeText:text isFinal:NO];
                     if (!self->_finishingRecognition)
@@ -946,6 +998,7 @@ static float rateMultiplierToAVRate(float multiplier) {
         _inputTapInstalled = NO;
     }
     _finishingRecognition = YES;
+    _commandAtEndAudio = [_lastPartialCommand copy];
     [_recognitionRequest endAudio];
     // Bound the wait for a final result if the speech service never responds.
     _silenceTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 target:self
@@ -1042,6 +1095,9 @@ static float rateMultiplierToAVRate(float multiplier) {
 
 - (void)savePreferences {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setBool:self.narrationAvailable forKey:kNarrationAvailableKey];
+    [defaults setBool:self.dictationAvailable forKey:kDictationAvailableKey];
+    [defaults setBool:self.speakCommandConfirmations forKey:kSpeakCommandConfirmationsKey];
     [defaults setInteger:self.commandConfirmationMode forKey:kCommandConfirmationModeKey];
     [defaults setInteger:_voiceMode forKey:kVoiceModeKey];
     [defaults setFloat:_speechRate forKey:kSpeechRateKey];
@@ -1052,6 +1108,9 @@ static float rateMultiplierToAVRate(float multiplier) {
 
 - (void)loadPreferences {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    _narrationAvailable = [defaults objectForKey:kNarrationAvailableKey] ? [defaults boolForKey:kNarrationAvailableKey] : YES;
+    _dictationAvailable = [defaults objectForKey:kDictationAvailableKey] ? [defaults boolForKey:kDictationAvailableKey] : YES;
+    _speakCommandConfirmations = [defaults objectForKey:kSpeakCommandConfirmationsKey] ? [defaults boolForKey:kSpeakCommandConfirmationsKey] : YES;
     if ([defaults objectForKey:kCommandConfirmationModeKey]) {
         NSInteger storedMode = [defaults integerForKey:kCommandConfirmationModeKey];
         self.commandConfirmationMode = storedMode >= VoiceCommandConfirmationOff && storedMode <= VoiceCommandConfirmationAlways

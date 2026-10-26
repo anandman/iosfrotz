@@ -3,10 +3,42 @@
 #import "RichTextView.h"
 #import "StoryMainViewController.h"
 #import "StoryInputLine.h"
+#import "StoryView.h"
 #import "FrotzSettings.h"
 #import "FrotzAppDelegate.h"
 #import "FrotzInfo.h"
 #import <objc/runtime.h>
+
+// Each case owns these preferences, including when rerunning a previously used QA app.
+@interface VoicePreferenceIsolatedTestCase : XCTestCase
+@property (nonatomic, copy) NSDictionary<NSString *, id> *savedFeaturePreferences;
+@end
+@implementation VoicePreferenceIsolatedTestCase
+- (void)setUp {
+    [super setUp];
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSMutableDictionary *saved = [NSMutableDictionary dictionary];
+    for (NSString *key in @[@"FrotzSpeakCommandConfirmations", @"FrotzNarrationAvailable", @"FrotzDictationAvailable"]) {
+        saved[key] = [defaults objectForKey:key] ?: NSNull.null;
+        [defaults removeObjectForKey:key];
+    }
+    self.savedFeaturePreferences = saved;
+}
+- (void)tearDown {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    for (NSString *key in self.savedFeaturePreferences) {
+        id value = self.savedFeaturePreferences[key];
+        if (value == NSNull.null) [defaults removeObjectForKey:key];
+        else [defaults setObject:value forKey:key];
+    }
+    self.savedFeaturePreferences = nil;
+    [super tearDown];
+}
+@end
+
+@interface UITableViewController (VoiceHelpTesting)
+- (NSString *)helpTextForSection:(NSInteger)section;
+@end
 
 @interface FrotzSettingsController (ConfirmationTesting)
 - (void)create_UISwitches;
@@ -23,6 +55,7 @@
 @end
 
 @interface StoryMainViewController (VoiceTesting)
+- (BOOL)shouldActivateKeyboardForStoryTap;
 - (void)setupVoiceToolbar;
 - (void)updateVoiceButtonIcons;
 - (void)toggleTTS;
@@ -53,6 +86,26 @@
 }
 @end
 
+// Exercise the real StoryView tap route without bringing up a system keyboard.
+@interface TestStoryTouch : NSObject
+@property NSUInteger tapCount;
+@property UITouchPhase phase;
+@property NSTimeInterval timestamp;
+@property UIView *view;
+- (CGPoint)locationInView:(UIView *)view;
+@end
+@implementation TestStoryTouch
+- (CGPoint)locationInView:(UIView *)view { return CGPointMake(100, 100); }
+@end
+@interface TestTapPolicyController : TestStoryController
+@property NSUInteger keyboardToggles;
+@end
+@implementation TestTapPolicyController
+- (NSString *)currentStory { return @"fixture.z5"; }
+- (BOOL)isKBShown { return NO; }
+- (void)forceToggleKeyboard { ++self.keyboardToggles; }
+@end
+
 @interface TestEndingController : StoryMainViewController
 @property BOOL abandoned;
 @end
@@ -66,6 +119,7 @@
 @end
 
 @interface VoiceManager (Testing)
+@property (nonatomic) BOOL speakCommandConfirmations, narrationAvailable, dictationAvailable, narrationSelected, dictationSelected;
 + (AVSpeechSynthesisVoice *)automaticVoiceFromVoices:(NSArray<AVSpeechSynthesisVoice *> *)voices;
 + (AVSpeechSynthesisVoice *)automaticVoiceFromVoices:(NSArray<AVSpeechSynthesisVoice *> *)voices language:(NSString *)language;
 + (NSString *)languageFromBlorbAtPath:(NSString *)path;
@@ -102,6 +156,7 @@
 
 // Keep the tests independent of microphone permission, hardware and Apple's speech service.
 @interface TestVoiceManager : VoiceManager
+@property (nonatomic, copy) void (^permissionCompletion)(BOOL);
 @property BOOL recordingAllowed;
 @property NSString *confirmationPrompt;
 @property BOOL voiceOverRunning;
@@ -110,6 +165,7 @@
 @property NSUInteger audioDeactivations;
 @end
 @implementation TestVoiceManager
+- (void)requestSTTPermissionsWithCompletion:(void (^)(BOOL))completion { self.permissionCompletion = completion; }
 - (BOOL)isVoiceOverEnabled { return self.voiceOverRunning; }
 - (void)playVoiceFeedback:(VoiceFeedback)feedback {
     if (!self.feedback) self.feedback = [NSMutableArray array];
@@ -314,7 +370,7 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
 - (AVAudioSession *)recordingAudioSession { return (id)self.session; }
 @end
 
-@interface FrotzVoiceTests : XCTestCase
+@interface FrotzVoiceTests : VoicePreferenceIsolatedTestCase
 @property TestVoiceManager *manager;
 @property TestAudioEngine *engine;
 @property TestSpeechRecognizer *recognizer;
@@ -322,6 +378,247 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
 @end
 
 @implementation FrotzVoiceTests
+- (void)testDictationTripleTapDoesNotSuppressTheNextWordSelection {
+    [self withAutomaticListeningController:^(TestStoryController *unused) {
+        TestTapPolicyController *controller = [TestTapPolicyController new];
+        StoryView *story = [[StoryView alloc] initWithFrame:CGRectMake(0, 0, 320, 480)];
+        story.delegate = controller;
+        TestStoryTouch *touch = [TestStoryTouch new];
+        touch.tapCount = 3; touch.phase = UITouchPhaseEnded; touch.timestamp = 10000;
+        self.manager.voiceMode = VoiceModeSTTOnly;
+        [story handleTouch:(id)touch withEvent:nil];
+        XCTAssertFalse([[controller valueForKey:@"m_ignoreWordSelection"] boolValue]);
+        XCTAssertEqual(controller.keyboardToggles, 0u);
+        self.manager.voiceMode = VoiceModeOff;
+        [story handleTouch:(id)touch withEvent:nil];
+        XCTAssertTrue([[controller valueForKey:@"m_ignoreWordSelection"] boolValue]);
+        XCTAssertEqual(controller.keyboardToggles, 1u, @"Classic triple-tap keeps its existing behavior");
+    }];
+}
+- (void)testStoryTapKeepsDictationActiveButClassicTapStillTypes {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        self.manager.voiceMode = VoiceModeSTTOnly;
+        XCTAssertFalse([controller shouldActivateKeyboardForStoryTap]);
+        self.manager.voiceMode = VoiceModeTTSOnly;
+        XCTAssertTrue([controller shouldActivateKeyboardForStoryTap]);
+        self.manager.voiceMode = VoiceModeOff;
+        XCTAssertTrue([controller shouldActivateKeyboardForStoryTap]);
+    }];
+}
+- (void)testSelectedWordsSurviveChangingPartialAndFinalRecognition {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        self.manager.commandConfirmationMode = VoiceCommandConfirmationOff;
+        [controller voiceManagerDidRecognizeText:@"take" isFinal:NO];
+        int saved = ipzAllowInput;
+        ipzAllowInput = kIPZRequestInput;
+        [controller textSelected:@"gown" animDuration:0 hilightView:nil];
+        XCTestExpectation *selection = [self expectationWithDescription:@"selection copied"];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [selection fulfill]; });
+        [self waitForExpectations:@[selection] timeout:1];
+        [controller voiceManagerDidRecognizeText:@"take the" isFinal:NO];
+        XCTAssertEqualObjects([controller inputLine].text, @"take the gown");
+        [controller voiceManagerDidRecognizeText:@"take gown" isFinal:YES];
+        XCTAssertEqualObjects(controller.submittedCommands, (@[@"take gown"]));
+        ipzAllowInput = saved;
+    }];
+}
+- (void)testRepeatedSelectionDoesNotSubmitAndCancellationClearsComposition {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        self.manager.commandConfirmationMode = VoiceCommandConfirmationOff;
+        int saved = ipzAllowInput;
+        @try {
+            ipzAllowInput = kIPZRequestInput;
+            [controller voiceManagerDidRecognizeText:@"put" isFinal:NO];
+            [controller textSelected:@"gown" animDuration:0 hilightView:nil];
+            [controller textSelected:@"on table" animDuration:0 hilightView:nil];
+            XCTAssertEqualObjects([controller inputLine].text, @"put gown on table");
+            XCTAssertEqual(controller.submittedCommands.count, 0u);
+            [controller voiceManagerDidRecognizeText:@"put the" isFinal:NO];
+            XCTAssertEqualObjects([controller inputLine].text, @"put the gown on table");
+            [controller stopVoiceActivity];
+            XCTAssertNil([controller valueForKey:@"m_voiceSelectedText"]);
+            XCTAssertNil([controller valueForKey:@"m_voicePartialText"]);
+        } @finally { ipzAllowInput = saved; }
+    }];
+}
+- (void)testMissingConfidenceAloneDoesNotInterruptSmartConfirmation {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        [controller scheduleVoiceListening]; [self drainCallbacks];
+        [self sendAlternatives:@[@"plugh"] confidence:0];
+        XCTAssertEqualObjects(controller.submittedCommands, (@[@"plugh"]));
+        XCTAssertNil([controller valueForKey:@"m_pendingVoiceCommand"]);
+    }];
+}
+- (void)testSafeAmbiguityWithMissingScoresStillNeedsReview {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        [controller scheduleVoiceListening]; [self drainCallbacks];
+        [self sendAlternatives:@[@"wet", @"west", @"wait"] confidence:0];
+        XCTAssertTrue(self.manager.recognizedCommandNeedsConfirmation);
+        XCTAssertEqual(controller.submittedCommands.count, 0u);
+    }];
+}
+- (void)testChangedFinalCommandAfterEndAudioIsReviewedEvenWithHighConfidence {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        [controller scheduleVoiceListening]; [self drainCallbacks];
+        [self sendText:@"take gown" final:NO handler:self.recognizer.handlers.lastObject];
+        [self.manager silenceTimerFired];
+        [self sendAlternatives:@[@"bake down"] confidence:0.95];
+        XCTAssertEqual(controller.submittedCommands.count, 0u);
+        XCTAssertEqualObjects([controller valueForKey:@"m_pendingVoiceCommand"], @"bake down");
+    }];
+}
+- (void)testSpokenConfirmationPreferenceDefaultsOnAndPersistsOff {
+    [self withSavedVoiceDefaults:^(NSUserDefaults *defaults) {
+        [defaults removeObjectForKey:@"FrotzSpeakCommandConfirmations"];
+        VoiceManager *fresh = [VoiceManager new];
+        XCTAssertTrue(fresh.speakCommandConfirmations);
+        fresh.speakCommandConfirmations = NO;
+        [fresh savePreferences];
+        XCTAssertFalse([VoiceManager new].speakCommandConfirmations);
+    }];
+}
+- (void)testSilentConfirmationDoesNotSpeakButRemainsAvailableToVoiceOver {
+    VoiceManager *manager = [VoiceManager new];
+    manager.voiceMode = VoiceModeSTTOnly;
+    manager.speakCommandConfirmations = NO;
+    TestSynthesizer *synth = [TestSynthesizer new];
+    [manager setValue:synth forKey:@"synthesizer"];
+    [manager speakConfirmationPrompt:@"Say confirm, retry or cancel."];
+    XCTAssertEqual(synth.utterances, 0u);
+    self.manager.speakCommandConfirmations = NO;
+    self.manager.voiceOverRunning = YES;
+    [self.manager speakConfirmationPrompt:@"Say confirm, retry or cancel."];
+    XCTAssertEqualObjects(self.manager.announcements.lastObject, @"Say confirm, retry or cancel.");
+    [manager stopSpeaking];
+}
+- (void)testSilentPromptStartsConfirmationCaptureWithoutSubmittingTurn {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        self.manager.speakCommandConfirmations = NO;
+        [controller scheduleVoiceListening]; [self drainCallbacks];
+        [self sendAlternatives:@[@"bake down"] confidence:0.4];
+        [self drainCallbacks];
+        XCTAssertEqual(controller.submittedCommands.count, 0u);
+        XCTAssertEqualObjects([controller valueForKey:@"m_pendingVoiceCommand"], @"bake down");
+        XCTAssertTrue(self.manager.isListening);
+    }];
+}
+- (void)testFailedConfirmationRecognitionKeepsTheCommandAndUsableButtons {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        [controller scheduleVoiceListening]; [self drainCallbacks];
+        [self sendAlternatives:@[@"bake down"] confidence:0.4]; [self drainCallbacks];
+        [self.manager stopListening];
+        [controller voiceManagerSTTError:[NSError errorWithDomain:@"test" code:1 userInfo:nil]];
+        XCTAssertEqualObjects([controller valueForKey:@"m_pendingVoiceCommand"], @"bake down");
+        UIView *bar = [controller valueForKey:@"m_voiceTapOverlay"];
+        UIButton *confirm = [bar viewWithTag:910];
+        XCTAssertFalse(confirm.superview.hidden);
+        XCTAssertNil(controller.presentedViewController);
+        [confirm sendActionsForControlEvents:UIControlEventTouchUpInside];
+        [confirm sendActionsForControlEvents:UIControlEventTouchUpInside];
+        XCTAssertEqualObjects(controller.submittedCommands, (@[@"bake down"]));
+    }];
+}
+- (void)testConfirmationPanelStaysOpaqueAndScrollableInAShortInputWindow {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        UIView *background = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 240, 150)];
+        [controller setValue:background forKey:@"m_background"];
+        RichTextView *story = (id)controller.storyView;
+        story.frame = background.bounds;
+        story.backgroundColor = UIColor.clearColor;
+        [background addSubview:story];
+        [controller setValue:UIColor.whiteColor forKey:@"m_defaultBGColor"];
+        [controller scheduleVoiceListening]; [self drainCallbacks];
+        [self sendAlternatives:@[@"bake down"] confidence:0.4]; [self drainCallbacks];
+        [controller refreshVoicePresentationForInputWindow];
+        UIView *bar = [controller valueForKey:@"m_voiceTapOverlay"];
+        XCTAssertNotNil(bar.superview);
+        XCTAssertEqual(CGColorGetAlpha(bar.backgroundColor.CGColor), 1);
+        XCTAssertGreaterThanOrEqual(story.frame.size.height, 44);
+        [bar layoutIfNeeded];
+        UIScrollView *scroll = [bar viewWithTag:997];
+        XCTAssertTrue([scroll isKindOfClass:UIScrollView.class]);
+        XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.size.height);
+        for (NSNumber *tag in @[@910, @911, @912]) {
+            UIButton *button = [bar viewWithTag:tag.integerValue];
+            XCTAssertGreaterThanOrEqual(button.bounds.size.width, 44);
+            XCTAssertGreaterThanOrEqual(button.bounds.size.height, 44);
+            XCTAssertTrue(button.isAccessibilityElement);
+        }
+    }];
+}
+- (void)testAvailabilityMigrationPreservesModeAndOtherPreferences {
+    [self withSavedVoiceDefaults:^(NSUserDefaults *defaults) {
+        [defaults removeObjectForKey:@"FrotzNarrationAvailable"];
+        [defaults removeObjectForKey:@"FrotzDictationAvailable"];
+        [defaults setInteger:VoiceModeBoth forKey:@"FrotzVoiceMode"];
+        [defaults setFloat:1.4 forKey:@"FrotzSpeechRate"];
+        VoiceManager *fresh = [TestVoiceManager new];
+        XCTAssertTrue(fresh.narrationAvailable); XCTAssertTrue(fresh.dictationAvailable);
+        fresh.dictationAvailable = NO;
+        XCTAssertTrue(fresh.ttsEnabled); XCTAssertFalse(fresh.sttEnabled);
+        [fresh savePreferences];
+        XCTAssertEqual([defaults integerForKey:@"FrotzVoiceMode"], VoiceModeBoth);
+        XCTAssertEqualWithAccuracy(fresh.speechRate, 1.4, 0.01);
+        fresh.narrationSelected = NO;
+        fresh.dictationAvailable = YES;
+        XCTAssertFalse(fresh.ttsEnabled); XCTAssertTrue(fresh.sttEnabled);
+        XCTAssertFalse(fresh.isListening);
+        fresh.narrationAvailable = NO;
+        [fresh rememberStoryResponse:@"The prior turn."];
+        TestSynthesizer *synth = [TestSynthesizer new];
+        [fresh setValue:synth forKey:@"synthesizer"];
+        XCTAssertFalse([fresh replayLastStoryResponse]);
+        XCTAssertEqual(synth.utterances, 0u);
+    }];
+}
+- (void)testDisablingDictationCancelsCaptureAndPendingConfirmationOnly {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        [controller scheduleVoiceListening]; [self drainCallbacks];
+        [self sendAlternatives:@[@"bake down"] confidence:0.4]; [self drainCallbacks];
+        self.manager.dictationAvailable = NO;
+        XCTAssertFalse(self.manager.isListening);
+        XCTAssertNil([controller valueForKey:@"m_pendingVoiceCommand"]);
+        self.manager.dictationAvailable = YES;
+        [self drainCallbacks];
+        XCTAssertFalse(self.manager.isListening);
+        XCTAssertEqual(controller.submittedCommands.count, 0u);
+    }];
+}
+- (void)testRootOffersOneVoicePageAndDetailsStayOnTheSubpage {
+    [self withAutomaticListeningController:^(TestStoryController *controller) {
+        FrotzSettingsController *settings = [FrotzSettingsController new];
+        [settings loadViewIfNeeded];
+        NSMutableArray *labels = [NSMutableArray array];
+        for (NSInteger row = 0; row < [settings tableView:settings.tableView numberOfRowsInSection:1]; ++row)
+            [labels addObject:[settings tableView:settings.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:1]].textLabel.text ?: @""];
+        XCTAssertTrue([labels containsObject:@"Voice"]);
+        XCTAssertFalse([labels containsObject:@"Text-to-Speech"]);
+        XCTAssertFalse([labels containsObject:@"Voice Command Confirmation"]);
+        UITableViewController *voice = [NSClassFromString(@"FrotzVoiceSettingsController") new];
+        XCTAssertNotNil(voice);
+        [voice loadViewIfNeeded];
+        XCTAssertEqual([voice numberOfSectionsInTableView:voice.tableView], 3);
+        self.manager.voiceOverRunning = NO;
+        NSString *general = [(id)voice helpTextForSection:2];
+        XCTAssertFalse([general containsString:@"two-finger"]);
+        self.manager.voiceOverRunning = YES;
+        XCTAssertTrue([[(id)voice helpTextForSection:2] containsString:@"two-finger"]);
+    }];
+}
+- (void)testLateMicrophonePermissionCannotEnableAnInactiveStory {
+    [self withSavedVoiceDefaults:^(NSUserDefaults *defaults) {
+        [self withAutomaticListeningController:^(TestStoryController *controller) {
+            self.manager.voiceMode = VoiceModeOff;
+            [controller toggleSTT];
+            void (^reply)(BOOL) = self.manager.permissionCompletion;
+            self.manager.permissionCompletion = nil;
+            XCTAssertNotNil(reply); if (!reply) return;
+            [controller stopVoiceActivity];
+            reply(YES);
+            XCTAssertFalse(self.manager.sttEnabled);
+        }];
+    }];
+}
 - (void)testFailedRecordingPreflightReleasesAudioRetainedForHandoff {
     self.manager.voiceMode = VoiceModeBoth;
     self.voiceDelegate.keepAudioForListening = YES;
@@ -1108,7 +1405,7 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
 }
 - (void)testSelectedVoicePersistsAndMissingVoiceFallsBack {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSArray *keys = @[@"FrotzVoiceMode", @"FrotzSpeechRate", @"FrotzSpeechVoiceIdentifier", @"FrotzSpeechRecognitionLanguage", @"FrotzVoiceCommandConfirmationEnabled", @"FrotzVoiceCommandConfirmationMode"];
+    NSArray *keys = @[@"FrotzVoiceMode", @"FrotzSpeechRate", @"FrotzSpeechVoiceIdentifier", @"FrotzSpeechRecognitionLanguage", @"FrotzVoiceCommandConfirmationEnabled", @"FrotzVoiceCommandConfirmationMode", @"FrotzSpeakCommandConfirmations", @"FrotzNarrationAvailable", @"FrotzDictationAvailable"];
     NSMutableDictionary *saved = [NSMutableDictionary dictionary];
     for (NSString *key in keys) saved[key] = [defaults objectForKey:key] ?: [NSNull null];
     @try {
@@ -1247,7 +1544,7 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
 }
 - (void)withSavedVoiceDefaults:(void (^)(NSUserDefaults *defaults))test {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    NSArray *keys = @[@"FrotzVoiceMode", @"FrotzSpeechRate", @"FrotzSpeechVoiceIdentifier", @"FrotzSpeechRecognitionLanguage", @"FrotzVoiceCommandConfirmationEnabled", @"FrotzVoiceCommandConfirmationMode"];
+    NSArray *keys = @[@"FrotzVoiceMode", @"FrotzSpeechRate", @"FrotzSpeechVoiceIdentifier", @"FrotzSpeechRecognitionLanguage", @"FrotzVoiceCommandConfirmationEnabled", @"FrotzVoiceCommandConfirmationMode", @"FrotzSpeakCommandConfirmations", @"FrotzNarrationAvailable", @"FrotzDictationAvailable"];
     NSMutableDictionary *saved = [NSMutableDictionary dictionary];
     for (NSString *key in keys) saved[key] = [defaults objectForKey:key] ?: NSNull.null;
     @try { test(defaults); }
@@ -1366,11 +1663,23 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
             FrotzSettingsController *settings = [[FrotzSettingsController alloc] init];
             [settings create_UISwitches];
             UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:settings];
-            NSIndexPath *choicePath = nil;
+            NSIndexPath *voicePath = nil;
             for (NSInteger row = 0; row < [settings tableView:nil numberOfRowsInSection:1]; ++row) {
                 NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:1];
-                UITableViewCell *cell = [settings tableView:nil cellForRowAtIndexPath:path];
-                if ([cell.textLabel.text isEqualToString:@"Voice Command Confirmation"]) {
+                if ([[settings tableView:nil cellForRowAtIndexPath:path].textLabel.text isEqualToString:@"Voice"]) voicePath = path;
+            }
+            XCTAssertNotNil(voicePath); if (!voicePath) return;
+            BOOL rootAnimations = UIView.areAnimationsEnabled;
+            [UIView setAnimationsEnabled:NO];
+            [settings tableView:nil didSelectRowAtIndexPath:voicePath];
+            [UIView setAnimationsEnabled:rootAnimations];
+            UITableViewController *voiceSettings = (id)navigation.topViewController;
+            XCTAssertNotEqual(voiceSettings, settings);
+            NSIndexPath *choicePath = nil;
+            for (NSInteger row = 0; row < [voiceSettings tableView:nil numberOfRowsInSection:0]; ++row) {
+                NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
+                UITableViewCell *cell = [voiceSettings tableView:nil cellForRowAtIndexPath:path];
+                if ([cell.textLabel.text isEqualToString:@"Command Confirmation"]) {
                     choicePath = path;
                     XCTAssertEqualObjects(cell.detailTextLabel.text, @"Off");
                     XCTAssertEqual(cell.accessoryType, UITableViewCellAccessoryDisclosureIndicator);
@@ -1379,7 +1688,7 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
             XCTAssertNotNil(choicePath); if (!choicePath) return;
             BOOL animationsEnabled = UIView.areAnimationsEnabled;
             [UIView setAnimationsEnabled:NO];
-            [settings tableView:nil didSelectRowAtIndexPath:choicePath];
+            [voiceSettings tableView:nil didSelectRowAtIndexPath:choicePath];
             [UIView setAnimationsEnabled:animationsEnabled];
             UITableViewController *picker = (id)navigation.topViewController;
             XCTAssertNotEqual(picker, settings);
@@ -1395,7 +1704,7 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
                 cell = [picker tableView:picker.tableView cellForRowAtIndexPath:path];
                 XCTAssertEqual(cell.accessoryType, UITableViewCellAccessoryCheckmark);
                 XCTAssertTrue(cell.accessibilityTraits & UIAccessibilityTraitSelected);
-                XCTAssertEqualObjects([settings tableView:nil cellForRowAtIndexPath:choicePath].detailTextLabel.text, names[value.integerValue]);
+                XCTAssertEqualObjects([voiceSettings tableView:nil cellForRowAtIndexPath:choicePath].detailTextLabel.text, names[value.integerValue]);
             }
             picker.view.frame = CGRectMake(0, 0, UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? 768 : 320, 640);
             [picker.tableView reloadData]; [picker.view layoutIfNeeded];
@@ -1892,7 +2201,7 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
 #ifndef FROTZ_ENABLE_DICTATION
 #define FROTZ_ENABLE_DICTATION 1
 #endif
-@interface VoiceFeatureGateTests : XCTestCase
+@interface VoiceFeatureGateTests : VoicePreferenceIsolatedTestCase
 @end
 @implementation VoiceFeatureGateTests
 - (void)testDisabledFeaturesCannotBecomeEffectiveOrOverwriteSavedMode {

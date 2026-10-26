@@ -1,0 +1,56 @@
+name: Unsigned voice beta (Xcode 26)
+
+on:
+  push:
+    branches: [codex/testflight-build9]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'anandman/iosfrotz'
+    runs-on: macos-15-intel
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify stable SDK and install locked dependencies
+        run: |
+          xcodebuild -version
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = '26.2'
+          mkdir -p artifacts
+          gem install cocoapods -v 1.16.2 --no-document
+          pod _1.16.2_ install --deployment
+      - name: Build portable arm64 simulator tests
+        run: |
+          xcodebuild -workspace Frotz.xcworkspace -scheme Frotz -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ci-sim-arm64 ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=13.0 PRODUCT_BUNDLE_IDENTIFIER=design.highgain.Frotz.CraigReview9 build-for-testing > artifacts/simulator-arm64.log 2>&1
+          ditto -c -k --keepParent ci-sim-arm64/Build/Products artifacts/Frotz-test-products-arm64.zip
+          ditto -c -k --keepParent ci-sim-arm64/Build/Products/Debug-iphonesimulator/Frotz.app artifacts/Frotz-simulator.zip
+      - name: Archive build 9 without signing credentials
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          with open('Info.plist', 'rb') as f:
+              info = plistlib.load(f)
+          info.update(CFBundleVersion='9', CFBundleShortVersionString='1.8.9', CFBundleDisplayName='Frotz Voice', CFBundleName='Frotz Voice', ITSAppUsesNonExemptEncryption=False)
+          with open('/tmp/FrotzVoice9-Info.plist', 'wb') as f:
+              plistlib.dump(info, f)
+          PY
+          xcodebuild -workspace Frotz.xcworkspace -scheme Frotz -configuration Release -destination 'generic/platform=iOS' -archivePath artifacts/FrotzVoice9.xcarchive -derivedDataPath ci-release CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=13.0 PRODUCT_BUNDLE_IDENTIFIER=design.highgain.Frotz INFOPLIST_FILE=/tmp/FrotzVoice9-Info.plist clean archive > artifacts/archive.log 2>&1
+          ditto -c -k --keepParent artifacts/FrotzVoice9.xcarchive artifacts/FrotzVoice9-unsigned.zip
+          git rev-parse HEAD > artifacts/source-commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FrotzVoice9-unsigned
+          path: |
+            artifacts/*.zip
+            artifacts/*.log
+            artifacts/*.txt
+            artifacts/*.xcresult
+          retention-days: 7
+          if-no-files-found: error
