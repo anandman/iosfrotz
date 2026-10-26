@@ -48,6 +48,7 @@ jobs:
           args=['xcodebuild','test','-workspace','Frotz.xcworkspace','-scheme','Frotz','-configuration','Debug','-destination','id='+uid,'-derivedDataPath','ci-test','-resultBundlePath','artifacts/results.xcresult','-parallel-testing-enabled','NO','CODE_SIGNING_ALLOWED=NO','IPHONEOS_DEPLOYMENT_TARGET=13.0']
           args += ['-only-testing:FrotzVoiceTests/'+name for name in config['tests']] if config['tests'] else ['-only-testing:FrotzVoiceTests']
           with (out/'tests.log').open('w') as log:code=subprocess.run(args,stdout=log,stderr=subprocess.STDOUT,timeout=1200).returncode
+          print('\n'.join((out/'tests.log').read_text().splitlines()[-35:]))
           summary=json.loads(output(['xcrun','xcresulttool','get','test-results','summary','--path','artifacts/results.xcresult','--format','json']))
           (out/'summary.json').write_text(json.dumps({'phase':config['phase'],'xcodebuildExit':code,'summary':summary},indent=2))
           total=summary['totalTestCount'];failed=summary['failedTests']

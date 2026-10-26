@@ -133,6 +133,7 @@ extern StoryBrowser *theStoryBrowser;
     BOOL m_voicePreparing;
     BOOL m_voiceResumeAfterKeyboard;
     NSString *m_pendingVoiceCommand;
+    NSString *m_voiceSelectedText, *m_voicePartialText;
     UIStackView *m_voiceConfirmationButtons;
     NSLayoutConstraint *m_voiceHintPosition;
     BOOL m_handsFreeAutoLoop;
@@ -170,6 +171,7 @@ extern StoryBrowser *theStoryBrowser;
 - (void)autosize;
 // A dedicated typing row above the compact voice controls, or CGRectNull.
 -(void)refreshVoicePresentationForInputWindow;
+-(BOOL)shouldActivateKeyboardForStoryTap;
 -(void) resizeStatusWindow;
 -(void) launchStory;
 -(void) abandonStory:(BOOL)deleteAutoSave;
