@@ -1,1 +1,17 @@
-{"phase": "red-final-review-boundaries", "tests": ["FrotzVoiceTests/testTypingEditsSurviveFurtherSelectionsWithDictationModeEnabled", "FrotzVoiceTests/testManualReturnEndsSelectionCompositionBeforeNextTurn", "FrotzVoiceTests/testSelectedWordBeforeMicrophoneStartSurvivesTheSpokenTurn", "FrotzVoiceTests/testFinalTranscriptAlreadyContainingSelectedPhraseDoesNotDuplicateIt", "FrotzVoiceTests/testGlkStoryTapsKeepDictationAndGameOwnedEventsSeparate", "FrotzVoiceTests/testLegacyVoiceToolbarCanEnableBothModesWithoutSystemSymbols", "FrotzVoiceTests/testHiddenVoiceBarStillOffersTouchCaptureAndCommandReview", "FrotzVoiceTests/testFallbackMenuActionsCannotResumeAfterLeavingAndReturning", "FrotzVoiceTests/testVoiceOverFallbackStartWaitsForItsOwnedAnnouncement"], "minimumTests": 9, "expectedFailures": 9, "expectedSkips": 0, "expectedFailureNames": ["FrotzVoiceTests/testTypingEditsSurviveFurtherSelectionsWithDictationModeEnabled", "FrotzVoiceTests/testManualReturnEndsSelectionCompositionBeforeNextTurn", "FrotzVoiceTests/testSelectedWordBeforeMicrophoneStartSurvivesTheSpokenTurn", "FrotzVoiceTests/testFinalTranscriptAlreadyContainingSelectedPhraseDoesNotDuplicateIt", "FrotzVoiceTests/testGlkStoryTapsKeepDictationAndGameOwnedEventsSeparate", "FrotzVoiceTests/testLegacyVoiceToolbarCanEnableBothModesWithoutSystemSymbols", "FrotzVoiceTests/testHiddenVoiceBarStillOffersTouchCaptureAndCommandReview", "FrotzVoiceTests/testFallbackMenuActionsCannotResumeAfterLeavingAndReturning", "FrotzVoiceTests/testVoiceOverFallbackStartWaitsForItsOwnedAnnouncement"]}
+{
+  "phase": "green-final-review-boundaries",
+  "tests": [
+    "FrotzVoiceTests/testTypingEditsSurviveFurtherSelectionsWithDictationModeEnabled",
+    "FrotzVoiceTests/testManualReturnEndsSelectionCompositionBeforeNextTurn",
+    "FrotzVoiceTests/testSelectedWordBeforeMicrophoneStartSurvivesTheSpokenTurn",
+    "FrotzVoiceTests/testFinalTranscriptAlreadyContainingSelectedPhraseDoesNotDuplicateIt",
+    "FrotzVoiceTests/testGlkStoryTapsKeepDictationAndGameOwnedEventsSeparate",
+    "FrotzVoiceTests/testLegacyVoiceToolbarCanEnableBothModesWithoutSystemSymbols",
+    "FrotzVoiceTests/testHiddenVoiceBarStillOffersTouchCaptureAndCommandReview",
+    "FrotzVoiceTests/testFallbackMenuActionsCannotResumeAfterLeavingAndReturning",
+    "FrotzVoiceTests/testVoiceOverFallbackStartWaitsForItsOwnedAnnouncement"
+  ],
+  "minimumTests": 9,
+  "expectedFailures": 0,
+  "expectedSkips": 0
+}
