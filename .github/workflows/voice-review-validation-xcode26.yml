@@ -1,0 +1,65 @@
+name: Voice review validation (Xcode 26)
+on:
+  push:
+    branches: [codex/voice-review-validation]
+permissions:
+  contents: read
+jobs:
+  test:
+    if: github.repository == 'anandman/iosfrotz'
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [phone, tablet]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify SDK and locked dependencies
+        run: |
+          xcodebuild -version
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = '26.2'
+          gem install cocoapods -v 1.16.2 --no-document
+          pod _1.16.2_ install --deployment
+      - name: Build and test a fresh simulator
+        env:
+          DEVICE_KIND: ${{ matrix.device }}
+        run: |
+          python3 - <<'PY'
+          import subprocess,json,os,pathlib
+          out=pathlib.Path('artifacts');out.mkdir()
+          def output(args):return subprocess.check_output(args,text=True)
+          runtimes=json.loads(output(['xcrun','simctl','list','runtimes','--json']))['runtimes']
+          runtime=next(r for r in runtimes if r.get('isAvailable') and r.get('version')=='26.2' and 'iOS' in r['name'])
+          types=json.loads(output(['xcrun','simctl','list','devicetypes','--json']))['devicetypes']
+          kind=os.environ['DEVICE_KIND']
+          matches=[t for t in types if ('iPhone' in t['name'] if kind=='phone' else 'iPad Pro' in t['name'])]
+          preferred=[t for t in matches if ('iPhone 17 Pro' in t['name'] if kind=='phone' else '11-inch' in t['name'])]
+          device=(preferred or matches)[-1]
+          uid=output(['xcrun','simctl','create','Frotz validation '+kind,device['identifier'],runtime['identifier']]).strip()
+          (out/'device.json').write_text(json.dumps({'device':device,'runtime':runtime['identifier'],'udid':uid},indent=2))
+          subprocess.run(['xcrun','simctl','boot',uid],check=True)
+          subprocess.run(['xcrun','simctl','bootstatus',uid,'-b'],check=True)
+          config=json.loads(pathlib.Path('.github/voice-review-tests.json').read_text())
+          args=['xcodebuild','test','-workspace','Frotz.xcworkspace','-scheme','Frotz','-configuration','Debug','-destination','id='+uid,'-derivedDataPath','ci-test','-resultBundlePath','artifacts/results.xcresult','-parallel-testing-enabled','NO','CODE_SIGNING_ALLOWED=NO','IPHONEOS_DEPLOYMENT_TARGET=13.0']
+          args += ['-only-testing:FrotzVoiceTests/'+name for name in config['tests']] if config['tests'] else ['-only-testing:FrotzVoiceTests']
+          with (out/'tests.log').open('w') as log:code=subprocess.run(args,stdout=log,stderr=subprocess.STDOUT,timeout=600).returncode
+          summary=json.loads(output(['xcrun','xcresulttool','get','test-results','summary','--path','artifacts/results.xcresult','--format','json']))
+          (out/'summary.json').write_text(json.dumps({'phase':config['phase'],'xcodebuildExit':code,'summary':summary},indent=2))
+          total=summary['totalTestCount'];failed=summary['failedTests']
+          print(json.dumps({'phase':config['phase'],'device':device['name'],'exit':code,'total':total,'passed':summary['passedTests'],'failed':failed,'skipped':summary['skippedTests']}))
+          assert total >= config['minimumTests'], 'No or too few tests executed'
+          assert failed == config['expectedFailures'], 'Unexpected test failures or missing expected RED'
+          assert summary['skippedTests'] == config['expectedSkips']
+          assert code == (65 if failed else 0), 'Build/test infrastructure failure'
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-review-${{ matrix.device }}
+          path: artifacts/
+          retention-days: 3

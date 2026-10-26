@@ -1,0 +1,1 @@
+{"phase":"red-palette-boundaries","tests":["FrotzVoiceTests/testAccessoryRefreshPreservesTheGamesInputColorAndScrollPosition","FrotzVoiceTests/testAccessoryUsesTheActiveGamePaletteWithoutAnExtraTurn"],"minimumTests":2,"expectedFailures":2,"expectedSkips":0}
