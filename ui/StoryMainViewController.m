@@ -6034,6 +6034,8 @@ static BOOL migateDropboxAuth() {
         button.titleLabel.numberOfLines = 0;
         button.tag = 910 + i;
         button.accessibilityIdentifier = [@"voice" stringByAppendingString:title];
+        button.isAccessibilityElement = YES;
+        button.accessibilityLabel = title;
         [button.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
         [button addTarget:self action:@selector(voiceConfirmationButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
         [buttons addObject:button];

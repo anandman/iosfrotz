@@ -53,6 +53,7 @@ jobs:
           (out/'summary.json').write_text(json.dumps({'phase':config['phase'],'xcodebuildExit':code,'summary':summary},indent=2))
           total=summary['totalTestCount'];failed=summary['failedTests']
           print(json.dumps({'phase':config['phase'],'device':device['name'],'exit':code,'total':total,'passed':summary['passedTests'],'failed':failed,'skipped':summary['skippedTests']}))
+          print(json.dumps(summary.get('testFailures', [])))
           assert total >= config['minimumTests'], 'No or too few tests executed'
           assert failed == config['expectedFailures'], 'Unexpected test failures or missing expected RED'
           if config.get('expectedFailureNames'):
