@@ -2376,29 +2376,35 @@ static UIImage *GlkGetImageCallback(int imageNum) {
 }
 
 -(void)refreshVoicePresentationForInputWindow {
-    [self restoreVoicePresentationFrame];
-    [m_voiceTapOverlay removeFromSuperview];
     RichTextView *owner = [self voiceInputView];
     if (!m_voiceTapOverlay || [VoiceManager shared].voiceMode == VoiceModeOff
-        || !owner.superview || !m_background) return;
-    CGRect original = owner.frame;
+        || !owner.superview || !m_background) {
+        [self restoreVoicePresentationFrame];
+        [m_voiceTapOverlay removeFromSuperview];
+        return;
+    }
+    if (m_voicePresentationOwner != owner) [self restoreVoicePresentationFrame];
+    CGRect original = m_voicePresentationOwner == owner ? m_voiceOwnerFrame : owner.frame;
     CGFloat height = [self voiceControlBarHeightForWidth:original.size.width];
     CGRect converted = [m_background convertRect:original fromView:owner.superview];
     if (!m_kbShown && fabs(CGRectGetMaxY(converted) - CGRectGetHeight(m_background.bounds)) < 2)
         height += self.view.safeAreaInsets.bottom;
     // A tiny text window must retain its input line. Toolbar/accessibility
     // controls remain available until the story returns to a roomy buffer.
-    if (original.size.height < height + MAX(44, m_inputLine.font.lineHeight + 2)) return;
+    if (original.size.height < height + MAX(44, m_inputLine.font.lineHeight + 2)) {
+        [self restoreVoicePresentationFrame];
+        [m_voiceTapOverlay removeFromSuperview];
+        return;
+    }
     m_voicePresentationOwner = owner;
     m_voiceOwnerFrame = original;
     CGRect textFrame = original;
     textFrame.size.height -= height;
-    owner.frame = textFrame;
+    if (!CGRectEqualToRect(owner.frame, textFrame)) owner.frame = textFrame;
     m_voiceTapOverlay.frame = CGRectMake(converted.origin.x, CGRectGetMaxY(converted) - height, converted.size.width, height);
     [m_background addSubview:m_voiceTapOverlay];
     [self updateVoiceControlBar];
     m_inputLine.backgroundColor = UIColor.clearColor;
-    m_inputLine.textColor = [owner getCurrentTextColor];
 }
 
 - (void)viewWillTransitionToSize:(CGSize)size
@@ -3282,7 +3288,6 @@ static int iosif_top_win_height = 1;
                         else {
                             [storyView setTextColorIndex: colIndex];
                             [m_inputLine setTextColor: color];
-    [self updateVoiceControlBar];
                         }
                         skip += [scanner scanLocation];
                     }
@@ -5530,7 +5535,7 @@ static BOOL migateDropboxAuth() {
     VoiceManager *vm = [VoiceManager shared];
     m_voiceTapOverlay.isAccessibilityElement = NO;
     RichTextView *owner = [self voiceInputView] ?: (id)m_storyView;
-    m_voiceTapOverlay.backgroundColor = owner.backgroundColor ?: m_defaultBGColor;
+    m_voiceTapOverlay.backgroundColor = [owner getCurrentBackgroundColor] ?: m_defaultBGColor;
     m_voiceMicButton.hidden = !vm.sttEnabled;
     BOOL speaking = vm.isSpeaking;
     m_voiceSpeechButton.hidden = !vm.ttsEnabled && !speaking && !vm.lastStoryResponse.length;
@@ -5554,7 +5559,7 @@ static BOOL migateDropboxAuth() {
         button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
         button.titleLabel.adjustsFontForContentSizeCategory = YES;
         button.titleLabel.numberOfLines = 2;
-        button.tintColor = vm.isListening && button == m_voiceMicButton ? UIColor.systemRedColor : (m_background.tintColor ?: UIColor.systemBlueColor);
+        button.tintColor = vm.isListening && button == m_voiceMicButton ? UIColor.systemRedColor : ([owner getCurrentTextColor] ?: m_defaultFGColor ?: UIColor.systemBlueColor);
         [button setTitleColor:button.tintColor forState:UIControlStateNormal];
     }
     if (preparing) {
@@ -5573,7 +5578,7 @@ static BOOL migateDropboxAuth() {
     m_voiceTapOverlay.accessibilityHint = m_voiceMicButton.accessibilityHint;
     UILabel *hint = [m_voiceTapOverlay viewWithTag:998];
     hint.hidden = !m_pendingVoiceCommand && !m_voiceInputError;
-    hint.textColor = [[self voiceInputView] ?: (id)m_storyView getCurrentTextColor] ?: m_defaultFGColor;
+    hint.textColor = [([self voiceInputView] ?: (id)m_storyView) getCurrentTextColor] ?: m_defaultFGColor;
     hint.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     if (m_voiceInputError && !m_pendingVoiceCommand) hint.text = m_voiceInputError;
     [self updateVoiceReplayActions];
@@ -5731,7 +5736,7 @@ static BOOL migateDropboxAuth() {
             : (vm.isListening ? [NSString stringWithFormat:@"Say %@, %@ or %@", controls[0], controls[1], controls[2]] : @"Tap to answer, or use the buttons"));
     hint.text = [NSString stringWithFormat:@"Heard: %@\n%@", m_pendingVoiceCommand, state];
     hint.accessibilityLabel = hint.text;
-    hint.textColor = [[self voiceInputView] ?: (id)m_storyView getCurrentTextColor] ?: m_defaultFGColor;
+    hint.textColor = [([self voiceInputView] ?: (id)m_storyView) getCurrentTextColor] ?: m_defaultFGColor;
 }
 
 -(void)speakPendingVoiceConfirmation {
