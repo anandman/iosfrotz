@@ -124,8 +124,10 @@
             }
             else if (tapCount == 3) {
                 [self clearSelection];
-                [delegate setIgnoreWordSelection:YES];
-                if ([delegate shouldActivateKeyboardForStoryTap]) [delegate forceToggleKeyboard];
+                if ([delegate shouldActivateKeyboardForStoryTap]) {
+                    [delegate setIgnoreWordSelection:YES];
+                    [delegate forceToggleKeyboard];
+                }
             }
         }
     }

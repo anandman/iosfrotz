@@ -1,1 +1,1 @@
-{"phase": "red-triple-tap-and-green-existing", "tests": [], "minimumTests": 118, "expectedFailures": 1, "expectedSkips": 2, "expectedFailureNames": ["FrotzVoiceTests/testDictationTripleTapDoesNotSuppressTheNextWordSelection"]}
+{"phase": "green-final-voice-review", "tests": [], "minimumTests": 118, "expectedFailures": 0, "expectedSkips": 2}
