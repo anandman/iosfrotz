@@ -1946,6 +1946,10 @@ static UIImage *GlkGetImageCallback(int imageNum) {
 - (void)setupVoiceToolbar {
     m_kbdToggleItem = [[UIBarButtonItem alloc] initWithImage:[UIImage imageNamed:@"icon-keyboard"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleKeyboard)];
     [m_kbdToggleItem setStyle: UIBarButtonItemStylePlain];
+    if (!FROTZ_ENABLE_NARRATION && !FROTZ_ENABLE_DICTATION) {
+        self.navigationItem.rightBarButtonItem = m_kbdToggleItem;
+        return;
+    }
 
     // All right-side toolbar buttons packed into a single compact stack
     if (@available(iOS 13.0, *)) {
@@ -1955,6 +1959,7 @@ static UIImage *GlkGetImageCallback(int imageNum) {
         [ttsBtn setImage:[[UIImage systemImageNamed:@"speaker.wave.1.fill"] imageByApplyingSymbolConfiguration:smallConfig] forState:UIControlStateNormal];
         [ttsBtn addTarget:self action:@selector(toggleTTS) forControlEvents:UIControlEventTouchUpInside];
         ttsBtn.tag = 901;
+        ttsBtn.hidden = !FROTZ_ENABLE_NARRATION;
         ttsBtn.accessibilityIdentifier = @"voiceNarration";
         ttsBtn.accessibilityTraits |= UIAccessibilityTraitStartsMediaSession;
 
@@ -1962,6 +1967,7 @@ static UIImage *GlkGetImageCallback(int imageNum) {
         [sttBtn setImage:[[UIImage systemImageNamed:@"mic"] imageByApplyingSymbolConfiguration:smallConfig] forState:UIControlStateNormal];
         [sttBtn addTarget:self action:@selector(toggleSTT) forControlEvents:UIControlEventTouchUpInside];
         sttBtn.tag = 902;
+        sttBtn.hidden = !FROTZ_ENABLE_DICTATION;
         sttBtn.accessibilityIdentifier = @"voiceDictation";
         sttBtn.accessibilityTraits |= UIAccessibilityTraitStartsMediaSession;
 
@@ -5125,6 +5131,7 @@ static BOOL migateDropboxAuth() {
 #pragma mark - Voice Mode
 
 -(void)toggleTTS {
+    if (!FROTZ_ENABLE_NARRATION) return;
     VoiceManager *vm = [VoiceManager shared];
     if (vm.ttsEnabled) {
         vm.voiceMode = vm.sttEnabled ? VoiceModeSTTOnly : VoiceModeOff;
@@ -5138,6 +5145,7 @@ static BOOL migateDropboxAuth() {
 }
 
 -(void)toggleSTT {
+    if (!FROTZ_ENABLE_DICTATION) return;
     VoiceManager *vm = [VoiceManager shared];
     if (vm.sttEnabled) {
         [self clearPendingVoiceCommand];
