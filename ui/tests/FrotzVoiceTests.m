@@ -57,6 +57,7 @@
 
 @interface StoryMainViewController (VoiceTesting)
 - (BOOL)shouldActivateKeyboardForStoryTap;
+- (BOOL)hasVerticalBar;
 - (void)setupLegacyVoiceToolbar;
 - (void)showVoiceControls:(id)sender;
 - (void)performVoiceFallbackAction:(NSString *)action;
@@ -82,8 +83,10 @@
 @interface TestStoryController : StoryMainViewController
 @property NSMutableArray<NSString *> *submittedCommands;
 @property RichTextView *voiceOwnerOverride;
+@property BOOL usesVerticalBarForTesting;
 @end
 @implementation TestStoryController
+- (BOOL)hasVerticalBar { return self.usesVerticalBarForTesting; }
 - (BOOL)canAcceptVoiceInput { return YES; }
 - (RichTextView *)voiceInputView { return self.voiceOwnerOverride ?: [super voiceInputView]; }
 - (void)autosize {} // Keep keyboard-layout work outside these voice-state tests.
@@ -511,6 +514,34 @@ typedef void (^RecognitionHandler)(SFSpeechRecognitionResult *, NSError *);
         touch.tapCount = 1; [story handleTouch:(id)touch withEvent:nil];
         XCTAssertEqual(controller.gameTapEvents, 1u);
         XCTAssertEqual(controller.keyboardActivations, before);
+    }];
+}
+- (void)testVerticalBarKeepsVoiceControlsReachableAfterTraitsArrive {
+    [self withReviewController:^(TestReviewController *controller) {
+        self.manager.voiceMode = VoiceModeOff;
+        XCTAssertNotNil(controller.navigationItem.rightBarButtonItem.customView);
+        // UIKit can supply the vertical-bar trait after the toolbar was created.
+        controller.usesVerticalBarForTesting = YES;
+        [controller updateVoiceButtonIcons];
+        UIBarButtonItem *voice = nil;
+        for (UIBarButtonItem *item in controller.navigationItem.rightBarButtonItems)
+            if ([item.accessibilityIdentifier isEqualToString:@"voiceLegacyControls"]) voice = item;
+        XCTAssertNotNil(voice, @"Vertical bars must keep a native route to narration and dictation configuration");
+        if (!voice) return;
+        XCTAssertNil(voice.customView);
+        XCTAssertEqual(voice.action, @selector(showVoiceControls:));
+        [controller showVoiceControls:voice];
+        UIAlertController *menu = (id)controller.capturedPresentation;
+        NSArray *titles = [menu.actions valueForKey:@"title"];
+        XCTAssertTrue([titles containsObject:@"Enable narration"]);
+        XCTAssertTrue([titles containsObject:@"Enable dictation"]);
+        [controller performVoiceFallbackAction:@"close"];
+        self.manager.narrationAvailable = self.manager.dictationAvailable = NO;
+        [controller updateVoiceButtonIcons];
+        XCTAssertFalse([controller.navigationItem.rightBarButtonItems containsObject:voice]);
+        self.manager.dictationAvailable = YES;
+        [controller updateVoiceButtonIcons];
+        XCTAssertTrue([controller.navigationItem.rightBarButtonItems containsObject:voice]);
     }];
 }
 - (void)testLegacyVoiceToolbarCanEnableBothModesWithoutSystemSymbols {

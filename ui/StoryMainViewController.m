@@ -5631,6 +5631,12 @@ static BOOL migateDropboxAuth() {
 }
 
 -(void)updateVoiceButtonIcons {
+    // Vertical bars omit the custom stack. Reuse the native menu after traits arrive.
+    if ((FROTZ_ENABLE_NARRATION || FROTZ_ENABLE_DICTATION)
+        && m_kbdToggleItem && !m_voiceLegacyItem && [self hasVerticalBar]) {
+        [self setupLegacyVoiceToolbar]; // Re-enters once with the native item installed.
+        return;
+    }
     [self showKeyboardLockState];
     if ([VoiceManager shared].voiceMode != VoiceModeOff && !m_voiceTapOverlay) [self setupVoiceTapOverlay];
     [self updateVoiceControlBar];
